@@ -1,0 +1,182 @@
+---
+title: "RabiArmany_Final"
+author: Rabi Armany
+description: ""
+date: last-modified
+format: 
+  html: 
+    embed-resources: true
+    self-contained-math: true
+---
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(plotly)
+library(gganimate)
+```
+
+# Final Project: CO2 Emissions by Country
+
+## Data Description
+
+In this project, I examine the CO2 Emissions Estimates data from the UN database. This data set has 4 main components: the country, the year data is estimated for (1975, 1985, 2005, 2010, 2015, 2018, 2019, and 2020), the total emissions of that country in that year (in thousand metric tons of carbon dioxide, the emissions per capita (metric tons of carbon dioxide), and finally additional footnotes and a source. Though this data is valuable, it leaves room for extrapolation. The main questions I wanted answered were in regards to whether or not there's a relationship between GDP per capita and CO2 Emissions, and which countries have had the highest increases and decreases in per capita emissions since the beginning of data estimation.
+
+```{r}
+CO2 <- read_csv("CO2_Emissions.csv", skip = 1) #reads in clean version of UN CO2 emissions
+head(CO2, 10)
+
+UNGDP <- read_csv("UNGDP.csv")
+head(UNGDP, 10) #preview the data
+
+ 
+
+```
+
+Though this doesn't paint the complete picture of the data, it provides a rudimentary synopsis of the variables that the data holds. This data is dirty, and in order to determine the answer to these questions it needs to be cleaned.
+
+## Data Transformation
+
+The CO2 data will be easier to understand if there's separate columns for emissions per capita and total emissions by country. Next, we can move those columns to after the "Year" column. We can get rid of the country code as well, since the information in that data isn't necessary for answering our questions. We must also rename the columns. Finally, the NA's in the footnotes can be replaced with "None".
+
+```{r}
+CO2_wider <- CO2 |>
+pivot_wider(names_from = 4, values_from = 5) |> #makes new columns for emissions per capita and total emissions by country
+  relocate(`Emissions (thousand metric tons of carbon dioxide)`, `Emissions per capita (metric tons of carbon dioxide)`, .after = `Year`) |> #moves emissions to directly after year
+select(2:7) 
+#gets rid of country code, not necessary since code doesn't contain useful information
+
+CO2_Named <- setNames(CO2_wider, c("Country", "Year", "Emissions (thousand metric tons of carbon dioxide)", "Emissions per capita (metric tons of carbon dioxide)", "Footnotes", "Source")) 
+#names columns based off CO2_wider
+
+CO2Clean <- CO2_Named |>
+    mutate(Footnotes=replace_na(Footnotes, "None")) #replaces NA values with "None" for no footnotes
+head(CO2Clean)
+
+```
+
+This data is much easier to work with. Now, the GDP data. We can start by renaming the columns, leaving x's for columns we want to remove, and removing them. Since the most recent common year between the GDP data and the CO2 data is 2020, we'll zero in on that data. Finally, we only need GDP per capita, not Total GDP.
+
+```{r}
+GDP_named2020 <- setNames(UNGDP, c("x", "Country", "Year", "Series", "Value", "x", "x")) |> #renames columns
+  select(!contains("x")) |> #removes unwanted columns
+  filter(str_detect(Year, "2020")) |> #filters to year 2020
+  filter(str_detect(Series, "GDP per capita")) #focuses on GDP per capita
+head(GDP_named2020)
+
+
+```
+
+Now we can begin to transform the data, and create a data set that contains the pertinent data from the GDP data and the CO2 data. We can start by creating a CO2 data set that only contains the year 2020, as that is the most recent year between the CO2 data set and the GDP data set. We can then merge the data sets by the "Country" column. This also filters out regions, totals, and other data that we don't need. Rename the columns of the new data set, leave x's for data that you don't need, remove the x's, and relocate the necessary columns to where they are needed. The commas in the gdp of this data need to be removed and the values need to be transformed from characters into numbers. A new column is created for these numbers. Finally, certain countries are read in with special characters that R is unfamiliar with, which need to be replaced.
+
+```{r}
+CO2Clean2020 <- CO2Clean |>
+  filter(str_detect(Year, "2020")) #most recent common year between CO2 and GDP
+
+CO2GDP_clean <- left_join(CO2Clean2020, GDP_named2020, by = "Country") #joins CO2 and GDP by country
+CO2GDP_clean <- setNames(CO2GDP_clean, c("Country", "Year", "Emissions (thousand metric tons of carbon dioxide)", "Emissions per capita (metric tons of carbon dioxide)", "x", "source", "x", "x", "GDP per capita (US dollars)")) |> #sets names
+  select(!starts_with("x")) |> #removes x columns
+  relocate("GDP per capita (US dollars)", .after = "Year") #relocates GDP
+
+CO2GDP_clean <- CO2GDP_clean |>
+  mutate(GDP = as.numeric(str_replace(`GDP per capita (US dollars)`, ",", "")))  #turns GDP into numeric value without commas
+
+CO2GDP_clean$Country[29] = "Côte d'Ivoire" #replaces rows with characters R can read
+CO2GDP_clean$Country[32] = "Curaçao" #replaces rows with characters R can read
+CO2GDP_clean$Country[135] = "Türkiye" #replaces rows with characters R can read
+
+head(CO2GDP_clean)
+```
+
+Next, in order to determine which countries have had the largest changes in CO2 emissions, a new column must be created to highlights those differences. To do this we can highlight the columns 2020 and 1975, and then create a new columns for each of those years. From there, we can create a column with the differences in those years. Finally, two data sets can be created, one that displays the 10 countries with the highest increase in emissions, and another with the 10 countries with the highest decrease in emissions. We can reorder these so that when graphed, they'll be displayed in a more visually appealing manner
+
+```{r}
+CO2_Wide_years <- CO2Clean |>
+  filter(str_detect(Year, "2020|1975")) |>
+  select(!contains("thousand")) #takes clean CO2 data with only the years 1975 and 2020
+CO2_Wide_years <- pivot_wider(CO2_Wide_years, names_from = "Year", values_from = "Emissions per capita (metric tons of carbon dioxide)") #pivots wider to create new columns for 1975 and 2020
+CO2_Wide_years <- CO2_Wide_years|>
+  mutate(Difference = CO2_Wide_years$"2020" -CO2_Wide_years$"1975") #creates new column with difference between 2020 and 1975
+
+CO2shortH <- CO2_Wide_years |>
+  group_by(Difference) |>
+  arrange(desc(Difference)) |> #arrange difference by highest to lowest
+  head(10) |> #top 10 countries with the highest increase in emissions per capita
+  mutate(Country = fct_reorder(Country, Difference))  #helps bar graph be in order
+
+CO2shortT <- CO2_Wide_years |>
+  group_by(Difference) |>
+  drop_na(Difference) |> #drops NA values
+  arrange((Difference)) |> #arrange difference from lowest to highest
+  head(10)  #top 10 countries with the highest decrease in emissions per capita
+  
+CO2shortT$Country[1] = "Curaçao" #changes special characters in Curaçao to readable format
+CO2shortT <- CO2shortT |>
+  mutate(Country = fct_reorder(Country, Difference)) #helps bar graph be in order
+  
+  
+
+```
+
+Now, both data sets have the data in the necessary position to be visualized. To determine the relationship between GDP per capita and emissions per capita, and since there are 150 countries to plot, a scatter plot with a geom_smooth line will be most efficient, and help us see patterns in the data. A simple bar chart will help display the 10 countries with the highest increase and decrease in CO2 Emissions.
+
+```{r}
+
+GDPgraph <- ggplot(CO2GDP_clean, aes(x = GDP, y = `Emissions per capita (metric tons of carbon dioxide)`, label = Country)) + 
+  geom_point() + #adds point graph 
+  geom_smooth() +  #adds smooth line
+  labs(title = "GDP per capita and emissions per capita", x = "GDP per capita (US dollars)", y = "Emissions per Capita (metric tons of carbon dioxide)") + #creates labels
+  theme(axis.title.y = element_text(size=8)) #changes y axis title size
+
+
+Increase <- ggplot(CO2shortH, aes(x = Country, y = as.numeric(Difference))) + geom_col() + #creates bar/column graph
+  theme(axis.text.x = element_text(angle = 55, hjust = 1)) + #creates bar graph with CO2ShortH to show highest countries
+  labs(title = "Countries with highest increase in emissions per capita", x = "Country", y = "Change in Emissions per Capita (metric tons of carbon dioxide)") + #creates labels
+  theme(axis.title.y = element_text(size=5)) #changes y axis title size
+
+
+
+Decrease <- ggplot(CO2shortT, aes(x = Country, y = as.numeric(Difference))) + 
+  geom_col() + 
+  theme(axis.text.x = element_text(angle = 55, hjust = 1)) + # creates bar graph with CO2ShortT to show lowest countries
+  labs(title = "Countries with highest decrease in emissions per capita", x = "Country", y = "Change in Emissions per Capita (metric tons of carbon dioxide)") +   #creates labels
+  theme(axis.title.y = element_text(size=5)) #changes y axis title size
+
+```
+
+## Analysis and Visualization
+
+### GDP per capita and CO2 Emissions
+
+```{r}
+ggplotly(GDPgraph)
+```
+
+This is the relationship between GDP per capita in US dollars and emissions per capita in metric tons of carbon dioxide. The general trend of emissions per capita as a function of GDP per capita is logarithmic. This means that generally, a country's emissions per capita increases as their GDP per capita increases, until GDP per capita reaches about the \$28000 mark, after which the curve begins to flatten out. This however is non-exhaustive, there are many countries both above and below that line. Note especially one outlier Qatar, with a GDP per capita of 52,316 and emissions per capita of 29.2 metric tons of CO2. There are other countries that display interesting data as well. Luxembourg, all the way on the right, has a GDP per capita of 117,724, and an emissions per capita of 11.8 metric tons of CO2. Australia and the United States have GDP per capitas that are slightly less and slightly more than half of Luxembourg's GDP per capita, but both countries have higher CO2 Emissions than Luxembourg.
+
+### Highest Increase and Decrease in per capita CO2 Emissions
+
+```{r}
+ggplotly(Decrease)
+ggplotly(Increase)
+
+
+```
+
+These are the 10 countries with the highest decrease and increase in emissions per capita. Curaçao had the highest decrease, decreasing by 47.3 metric tons per person. Gibraltar had the highest increase, increasing by 16.9 metric tons per person. The median difference for all countries is 0.3. It was surprising to see the different countries on each list. The United States is commonly thought of as a country enveloped by consumerist and wasteful tendencies, yet has decreased their per capita emissions starkly. China, on the other hand, has had a comparatively much higher increase. Additionally, more of the countries with higher increase in emissions per capita are typically considered underdeveloped countries, while all of the countries with high decreases in emissions are typically considered highly developed countries. This is also unsurprising; countries with higher development indexes would likely have better technology for reducing emissions and better standards for emissions from manufacturing and industry.
+
+## Reflection
+
+This data shows valuable insights about different countries and their CO2 emissions from 1975 until 2020. On its own, the data can reveal which countries have had the highest increase and decrease in emissions since 1975, among other data such as which countries currently have the highest and lowest emissions. When merged with data on GDP, the data can display CO2 emissions as a function of GDP, revealing an initial sharp increase in emissions as GDP increases, then tapering off logarithmically.
+
+These revelations, though valuable, leave much to be desired. How does the authority of a government dictate how much CO2 a country is producing. How does technological development play a role in emissions? What do the expected consequence of different levels of per capita emissions look like? What different policies have the largest impact on CO2 emissions? In order to answer these questions, we would need more data on technological development, different levels of government interference in both emissions directly and also the market, climate modeling data, and advanced policy data. This data is, however, also largely obtainable through the UN data base so these answers can, in all likelihood, be extrapolated.
+
+## Bibliography
+
+Hadley Wickham, Hadley, et al. “R for Data Science (2E).” *R for Data Science (2e)*, r4ds.hadley.nz/. Accessed 16 Aug. 2024.
+
+Long, James (JD), and Paul Teetor. “R Cookbook, 2nd Edition.” *R Cookbook, 2nd Edition*, 26 Sept. 2019, rc2e.com/.
+
+R Core Team. “R: A Language and Environment for Statistical \## Computing.” *The R Project for Statistical Computing*, R Foundation for Statistical Computing, Vienna, Austria., 2021, www.R-project.org.
+
+“Undata.” *United Nations*, United Nations, data.un.org/. Accessed 16 Aug. 2024.
